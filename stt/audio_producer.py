@@ -10,7 +10,10 @@ from .audio_config import AudioConfig
 class AudioProducer(threading.Thread):
     def __init__(self, 
                  wav_data: bytes,
-                 chunk_duration_ms: int = 20):  # Default 20ms chunks for real-time processing
+                 chunk_duration_ms: int = 20, 
+                 overwrap_segment: int = 0,
+                 feeding_segment_window: int = 1,
+                 need_wave_header:bool = False):  # Default 20ms chunks for real-time processing
         """
         Initialize AudioProducer with WAV data and chunk duration.
         
@@ -21,12 +24,16 @@ class AudioProducer(threading.Thread):
         super().__init__()
         self.wav_data = wav_data
         self.chunk_duration_ms = chunk_duration_ms
+        self.overwrap_segment = overwrap_segment
+        self.feeding_segment_window = feeding_segment_window
+        self.need_wave_header = need_wave_header
         self.audio_queue: queue.Queue = queue.Queue(maxsize=100)  # Limit queue size to prevent memory issues
         self.is_playing = False
         self.daemon = True
         self._audio_config: Optional[AudioConfig] = None
         self._start_time: Optional[float] = None
         self._samples_played: int = 0
+        self.audible_window_chunks = []         # audible window chunks. It will be used for feeding to STT service. The size of this list is feeding_segment_window.
         
     @property
     def audio_config(self) -> Optional[AudioConfig]:
@@ -52,6 +59,21 @@ class AudioProducer(threading.Thread):
         sleep_time = expected_time - elapsed_time
         
         return max(0, sleep_time)
+    
+    def make_audible_chunk_and_put(self, data: bytes):
+        # Try to add to queue, skip if full
+        try:
+            with io.BytesIO() as wav_buffer:
+                with wave.open(wav_buffer, 'wb') as output_buffer:
+                    output_buffer.setparams(wf.getparams())
+                    output_buffer.writeframes(data)
+                self.audio_queue.put(wav_buffer.getvalue(), block=False)
+        except queue.Full:
+            print("Warning: Audio queue is full, skipping chunk")
+            continue
+
+    def flush_audible_chunk(self):
+        pass
         
     def run(self):
         """Thread's main method - handles audio streaming"""
@@ -74,8 +96,6 @@ class AudioProducer(threading.Thread):
             self._start_time = None
             self._samples_played = 0
             
-            is_first_frame = True
-
             try:
                 while self.is_playing:
                     data = wf.readframes(chunk_size)
@@ -93,22 +113,10 @@ class AudioProducer(threading.Thread):
                     # Update tracking variables
                     self._samples_played += chunk_size
                     
-                    # Try to add to queue, skip if full
-                    try:
-                        if is_first_frame:
-                            #is_first_frame = False
-                            with io.BytesIO() as wav_buffer:
-                                with wave.open(wav_buffer, 'wb') as output_buffer:
-                                    output_buffer.setparams(wf.getparams())
-                                    output_buffer.writeframes(data)
-                                self.audio_queue.put(wav_buffer.getvalue(), block=False)
-                        else:
-                            self.audio_queue.put(data, block=False)
-                    except queue.Full:
-                        print("Warning: Audio queue is full, skipping chunk")
-                        continue
+                    self.make_audible_chunk_and_put(data)
                         
             finally:
+                self.flush_audible_chunk()
                 stream.stop_stream()
                 stream.close()
                 p.terminate()
