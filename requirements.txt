@@ -1,0 +1,6 @@
+pyaudio
+streamlit
+google-cloud-speech
+pydub
+python-dotenv
+vertexai
