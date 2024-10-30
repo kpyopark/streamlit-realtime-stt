@@ -15,7 +15,7 @@ TEST_FILE_NAME = os.getenv("TEST_FILE_NAME")
 
 # Audio recording parameters
 STREAMING_LIMIT = 240000  # 4 minutes
-SAMPLE_RATE = 8000
+SAMPLE_RATE = 48000
 DURATION_MS = 1000 # ms
 CHUNK_SIZE = int(SAMPLE_RATE * 1000 / DURATION_MS)  # 1 sec
 

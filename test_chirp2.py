@@ -12,7 +12,10 @@ import asyncio
 load_dotenv()
 
 PROJECT_ID = os.getenv("PROJECT_ID")
+LOCATION = 'asia-southeast1'
 TEST_FILE_NAME = os.getenv("TEST_FILE_NAME")
+
+SAMPLE_RATE = 48000
 
 def transcribe_sync_chirp2_auto_detect_language(
     audio_file: str
@@ -30,7 +33,7 @@ def transcribe_sync_chirp2_auto_detect_language(
     # Instantiates a client
     client = SpeechClient(
         client_options=ClientOptions(
-            api_endpoint="us-central1-speech.googleapis.com",
+            api_endpoint=f"{LOCATION}-speech.googleapis.com",
         )
     )
 
@@ -40,12 +43,12 @@ def transcribe_sync_chirp2_auto_detect_language(
 
     config = cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=["auto"],  # Set language code to auto to detect language.
-        model="chirp_2",
+        language_codes=['zh-TW', 'zh-CN'],  # Set language code to auto to detect language.
+        model="chirp",
     )
 
     request = cloud_speech.RecognizeRequest(
-        recognizer=f"projects/{PROJECT_ID}/locations/us-central1/recognizers/_",
+        recognizer=f"projects/{PROJECT_ID}/locations/{LOCATION}/recognizers/_",
         config=config,
         content=audio_content,
     )
@@ -62,7 +65,7 @@ def transcribe_sync_chirp2_auto_detect_language(
 def convert_to_wav(audio_file):
     audio = AudioSegment.from_file(audio_file)
     audio = audio.set_channels(1)  # mono
-    audio = audio.set_frame_rate(8000)  # 16kHz
+    audio = audio.set_frame_rate(SAMPLE_RATE)  # 16kHz
     
     # WAV 데이터를 메모리에 저장
     wav_buffer = io.BytesIO()
@@ -87,7 +90,7 @@ async def transcribe_streaming_chirp2(
     # Instantiates a client
     client = SpeechAsyncClient(
         client_options=ClientOptions(
-            api_endpoint="us-central1-speech.googleapis.com",
+            api_endpoint=f"{LOCATION}-speech.googleapis.com",
         )
     )
 
@@ -98,7 +101,7 @@ async def transcribe_streaming_chirp2(
     content = convert_to_wav(audio_file)
 
     # In practice, stream should be a generator yielding chunks of audio data
-    chunk_length = len(content) // 1000
+    chunk_length = SAMPLE_RATE # len(content) // 1000 # 25600 # SAMPLE_RATE # 
     stream = [
         content[start : start + chunk_length]
         for start in range(0, len(content), chunk_length)
@@ -109,8 +112,8 @@ async def transcribe_streaming_chirp2(
 
     recognition_config = cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),        
-        language_codes=["auto", ""],
-        model="chirp_2",
+        language_codes=["cmn-Hans-CN"],
+        model="long",
     )
     streaming_config = cloud_speech.StreamingRecognitionConfig(
         streaming_features=cloud_speech.StreamingRecognitionFeatures(
@@ -119,7 +122,7 @@ async def transcribe_streaming_chirp2(
         config=recognition_config
     )
     config_request = cloud_speech.StreamingRecognizeRequest(
-        recognizer=f"projects/{PROJECT_ID}/locations/us-central1/recognizers/_",
+        recognizer=f"projects/{PROJECT_ID}/locations/{LOCATION}/recognizers/_",
         streaming_config=streaming_config,
     )
 

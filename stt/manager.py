@@ -10,12 +10,21 @@ class AudioTranscriptionManager:
                  wav_data: bytes, 
                  stt_service: BaseSTTService,
                  language_code: str = "ko-KR",
-                 chunk_duration_ms: int = 20,
+                 chunk_duration_ms: int = 100,
+                 overwrap_segment: int = 2,
+                 feeding_segment_window: int = 20,
+                 need_wave_header:bool = True,
                  on_transcription: Optional[Callable[[str, bool], None]] = None,
                  on_error: Optional[Callable[[Exception], None]] = None,
                  message_queue: queue.Queue = None
                  ):
-        self.producer = AudioProducer(wav_data, chunk_duration_ms=chunk_duration_ms)
+        self.producer = AudioProducer(
+            wav_data, 
+            chunk_duration_ms=chunk_duration_ms,
+            overwrap_segment=overwrap_segment,
+            feeding_segment_window=feeding_segment_window,
+            need_wave_header=need_wave_header
+        )
         self.consumer = TranscriptionConsumer(
             audio_producer=self.producer,
             stt_service=stt_service,

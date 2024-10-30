@@ -11,6 +11,19 @@ from stt.google_cloud import GoogleCloudSTTService
 from stt.gemini_stt import GeminiSTTService
 from stt.manager import AudioTranscriptionManager
 
+from dotenv import load_dotenv
+
+from llm_utility import GeminiAPI
+import os
+import json
+
+load_dotenv()
+
+PROJECT_ID = os.getenv('PROJECT_ID')
+LOCATION = os.getenv('LOCATION')
+SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
+NCHANNEL = os.getenv("NCHANNEL")
+
 def main():
     st.set_page_config(layout="wide")
     
@@ -23,11 +36,40 @@ def main():
         st.session_state.full_transcript = []
     if 'transcription_items' not in st.session_state:
         st.session_state.transcription_items = queue.Queue()
+    if 'transcription_test_base' not in st.session_state:
+        st.session_state.transcription_test_base = None
         
     # 제목 영역을 왼쪽 정렬
     left_title_col, right_title_col = st.columns([1, 3])
     with left_title_col:
         st.title("🎤 음성 전사 앱")
+
+
+    def convert_to_mp3():
+        try:
+            # 오디오 파일이 존재하는지 확인
+            if 'audio_file' not in st.session_state:
+                raise ValueError("오디오 파일이 업로드되지 않았습니다.")
+            
+            audio_file = st.session_state.audio_file
+            original_filename = os.path.basename(audio_file.name)
+            filename_without_ext = os.path.splitext(original_filename)[0]
+            output_filename = f"{filename_without_ext}_{SAMPLING_RATE}.wav"
+            audio = AudioSegment.from_file(audio_file)
+            #audio = audio.set_channels(NCHANNEL)
+            audio = audio.set_frame_rate(SAMPLING_RATE)
+            wav_buffer = io.BytesIO()
+            audio.export(
+                wav_buffer,
+                format="wav",
+                parameters=["-q:a", "0"]  # 최고 품질 설정
+            )
+            with open(output_filename, 'wb') as f:
+                f.write(wav_buffer.getvalue())
+            return output_filename
+        except Exception as e:
+            st.error(f"오디오 변환 중 오류가 발생했습니다: {str(e)}")
+            return None
 
     def create_streamlit_transcription_manager(audio_file, language_code="ko-KR"):
         """Streamlit 앱용 트랜스크립션 매니저 생성 함수"""
@@ -55,7 +97,10 @@ def main():
             wav_data=wav_data,
             stt_service=stt_service,
             language_code=language_code,
-            chunk_duration_ms=2000,
+            chunk_duration_ms=100,
+            overwrap_segment=1,
+            feeding_segment_window = 41,
+            need_wave_header = True,
             on_transcription=update_transcription,
             on_error=handle_error,
             message_queue=st.session_state.transcription_items
@@ -76,51 +121,84 @@ def main():
             st.session_state.transcription_manager.stop()
             st.session_state.transcription_manager = None
     
+    
     # Create two columns with custom width ratio
     left_col, right_col = st.columns([1, 3])
     
     with left_col:
-        # Audio file upload and controls
+        st.markdown("### ⚙️ 설정")
+
+        transcription_text = st.text_area("Original Text (Ground Truth)", height=300)
+
+        if st.button("테스트 자료 생성", type="primary"):
+            if transcription_text:
+                with st.spinner("테스트 데이터 생성 중..."):
+                    # Gemini API 호출
+                    gemini = GeminiAPI(PROJECT_ID, LOCATION)
+                    transcription_test_base = gemini.transcription_to_testdata(transcription_text)
+                    
+                    if transcription_test_base:
+                        # 메인 영역에 결과 표시
+                        st.session_state.transcription_test_base = transcription_test_base
+                    else:
+                        st.error("테스트 데이터 생성에 실패했습니다.")
+            else:
+                st.warning("전사 원문을 입력해주세요.")
+
+        # Audio file upload moved to the right column
         audio_file = st.file_uploader("오디오 파일 선택 (MP3 또는 AAC)", type=['mp3', 'aac'])
-        
+
+        if audio_file:
+            st.session_state.audio_file = audio_file
+
         if audio_file:
             st.audio(audio_file)
-            
-            language = st.selectbox(
-                "언어 선택",
-                options=["한국어", "영어", "중국어", "일본어"],
-                format_func=lambda x: {
-                    "한국어": "한국어 (ko-KR)",
-                    "영어": "English (en-US)",
-                    "중국어": "简体中文 (zh-Hans-CN)",
-                    "일본어": "日本語 (ja-JP)"
-                }[x]
+        
+        # Language selection
+        language = st.selectbox(
+            "언어 선택",
+            options=["한국어", "영어", "중국어", "일본어"],
+            format_func=lambda x: {
+                "한국어": "한국어 (ko-KR)",
+                "영어": "English (en-US)",
+                "중국어": "简体中文 (zh-Hans-CN)",
+                "일본어": "日本語 (ja-JP)"
+            }[x]
+        )
+        
+        language_codes = {
+            "한국어": "ko-KR",
+            "영어": "en-US",
+            "중국어": "zh-Hans-CN",
+            "일본어": "ja-JP"
+        }
+        
+        # Control buttons
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            start_button = st.button(
+                "변환 시작",
+                disabled=st.session_state.is_transcribing,
+                on_click=start_transcription,
+                key='start_button'
             )
-            
-            language_codes = {
-                "한국어": "ko-KR",
-                "영어": "en-US",
-                "중국어": "zh-Hans-CN",
-                "일본어": "ja-JP"
-            }
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                start_button = st.button(
-                    "변환 시작",
-                    disabled=st.session_state.is_transcribing,
-                    on_click=start_transcription,
-                    key='start_button'
-                )
-            with col2:
-                stop_button = st.button(
-                    "변환 중지",
-                    disabled=not st.session_state.is_transcribing,
-                    on_click=stop_transcription,
-                    key='stop_button'
-                )
+        with col2:
+            stop_button = st.button(
+                "변환 중지",
+                disabled=not st.session_state.is_transcribing,
+                on_click=stop_transcription,
+                key='stop_button'
+            )
+        with col3:
+            convert_button = st.button(
+                "MP3전환",
+                disabled=st.session_state.is_transcribing,
+                on_click=convert_to_mp3,
+                key='mp3_convert'
+            )
 
     with right_col:
+            
         if st.session_state.is_transcribing:
             st.info("🔄 음성을 텍스트로 변환하는 중...")
         
@@ -197,7 +275,6 @@ def main():
                 }
             )
 
-        
         if audio_file:
             if st.session_state.is_transcribing and not st.session_state.transcription_manager:
                 try:
@@ -217,17 +294,51 @@ def main():
                 
                 if st.session_state.full_transcript:
                     # 최종 텍스트만 추출하여 다운로드용 텍스트 생성
-                    text_content = "\n".join([
+                    full_text_content = "\n".join([
                         item.transcript 
                         for item in st.session_state.full_transcript 
                         if item.is_final
                     ])
-                    st.download_button(
-                        label="텍스트 파일 다운로드",
-                        data=text_content,
-                        file_name=f"transcript_{language_codes[language]}.txt",
-                        mime="text/plain"
-                    )
+                    # transcript 컬럼만 포함된 다운로드용 텍스트 생성
+                    transcript_only_content = "\n".join([
+                        item.transcript 
+                        for item in st.session_state.full_transcript 
+                        if item.is_final
+                    ])
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="전체 정보 다운로드",
+                            data=full_text_content,
+                            file_name=f"full_transcript_{language_codes[language]}.txt",
+                            mime="text/plain"
+                        )
+                    with col2:
+                        st.download_button(
+                            label="Transcript만 다운로드",
+                            data=transcript_only_content,
+                            file_name=f"transcript_only_{language_codes[language]}.txt",
+                            mime="text/plain"
+                        )
+
+        # 메인 영역에 결과 표시
+        if 'transcription_test_base' in st.session_state:
+            st.header("원문을 통해서 생성된 테스트 데이터")
+            
+            # 결과를 테이블 형식으로 표시
+            if st.session_state.transcription_test_base:
+                data_view = [{"순서": item["seq_id"], "텍스트": item["text"]} 
+                            for item in st.session_state.transcription_test_base]
+                st.table(data_view)
+                
+                # JSON 다운로드 버튼
+                st.download_button(
+                    label="JSON 파일 다운로드",
+                    data=json.dumps(st.session_state.transcription_test_base, ensure_ascii=False, indent=2),
+                    file_name="test_data.json",
+                    mime="application/json"
+                )
 
     # Queue processing logic
     if st.session_state.is_transcribing:
@@ -242,22 +353,8 @@ def main():
         except Exception as e:
             st.error(f"Queue 처리 중 오류 발생: {str(e)}")
         st.rerun()
-
-    # Sidebar information
-    st.sidebar.markdown("""
-    ### 💡 사용 방법
-    1. AAC 또는 MP3 형식의 오디오 파일을 업로드합니다.
-    2. 음성의 언어를 선택합니다.
-    3. '변환 시작' 버튼을 클릭하면 실시간 변환이 시작됩니다.
-    4. 언제든 '변환 중지' 버튼으로 중단할 수 있습니다.
-    5. 변환이 완료되면 결과를 텍스트 파일로 다운로드할 수 있습니다.
     
-    ### ⚠️ 주의사항
-    - 파일 크기는 10MB 이하를 권장합니다.
-    - 깨끗한 음성일수록 더 정확한 결과를 얻을 수 있습니다.
-    - 모든 오디오는 16kHz 모노로 변환되어 처리됩니다.
-    """
-    )
+
 
 if __name__ == "__main__":
     main()
