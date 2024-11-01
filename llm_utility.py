@@ -61,26 +61,69 @@ class GeminiAPI:
             return_json = json.loads(fix_json_quotes(cleaned_string))
         return return_json
         
-    def transcription_to_testdata(self, transcription_text):
-        prompt = f"""다음 주어진 전사 원문을 이용하여 향후, Transcribe 모델(Speech to Text)에 대한 시험평가를 준비하고 있다. 
-        해당 원문에 대해서 문장 별로 분리해서 표시해줘. 
+    def transcription_to_testdata(self, original_text_json, transcription_text):
+        prompt = f"""현재 Transcribe 작업을 수행 중에 있다. CER, WER, SER 평가를 위해서 ground truth가 되는 원문을 문장별로 구분한 자료가 "original_text_json"으로 제공한다.
 
-        문장 분리를 진행할 때, 결과 인자 하나씩을 문장으로 인식하고 분리해주세요. 개별 문장에는 하나의 인자만 포함되어야 합니다. 불필요한 앞에서 언급한 원인을 추가하지 마세요. Transcribe 모델이기 때문에 원문을 그대로 유지하는 것이 제일 중요합니다.
-        또한, 사람이 읽지 못하는 캐릭터는 제거하고 그 자리를 공백으로 치환해 주세요. **예를 들어 ")" ":" 이런 캐릭터는 반드시 반드시 제외해야 합니다. **
+주어진 <transcription_text> 자료는 Speech to Text실시간 스트리밍 방식으로 전사된 문장들이며, 문장구분이 되어 있지 않다. 
+너는 주어진 <transcription_text> 스트링을 변형 하지 말고, 그냥 Split하는 위치를 잘 찾아서, "original_text_json"에 있는 seq_id별 문장과 제일 유사한 형태로 매칭하면된다.
+output의 "transcription" 필드에는 위에서 Split한 문장으로 원문에 있는 seq_id에 해당하는 내용만 짤라서 넣어야 한다. 
+Split한 문장이 너무 길다고 판단되면 다시 한번 재검토를 수행하면서 원 문장과 비교하면서 크기를 결정하여야 한다.
+만약 transcription에 있는 문장과 너가 출력한 "final" 결과에 있는 문장이 다를 경우 10만 달러의 벌금을 매길 것이다.
 
-        예시) 원인 : 공장 파이프라인 중단 -> 원인 공장 파이프라인 중단
+먼저 Draft로 문장분리를 수행하고, 다시 원문과  Draft를 비교 검토하여, 빠진 seq_id가 없는지 문장 분리를 다시 한번 정확하게 수행한다. 
+Draft본에서 seq_id가 없는 경우, 앞 seq_id에 있는 문장에 통합된 경우가 많다. 
+예를 들어, draft version에 
+"seq_id": 4, "statement_variation4 statement_variation5" 로 잘못 분리되었다면
+최종 final output은
+[ {{ "seq_id" : 4, "transcription" : "statement_variation4" , "original_text" : ... }}, {{ "seq_id" : 5, "transcription" : "statement_variation5" , "original_text" : ... }}, ... ]
+형태로 "original_text"에 기반하여 최대한 추가 분리를 수행하여, 원본과 순서 및 텍스트 정합성을 맟추어야 한다.
+
+<original_text_json>
+{original_text_json}
+</original_text_json>
+
+<transcription_text>
+{transcription_text}
+</transcription_text>
+
+<output example>
+{{ 
+"final" : [ {{
+"seq_id" : ...,
+"original_text" : ...,
+"transcription": ...
+}} ... ]
+}}
+</output example>"""
         
-        결과를 생각하고 다시한번 : , ":", "," 와 같이 사람이 읽지 못하는 문자가 들어가 있는지 확인해 보고, 이후에 결과를 적어주세요.
+        model = self.get_model()
+        response = model.generate_content(
+            [prompt],
+            generation_config=self.get_generation_config(),
+            safety_settings=self.get_safety_settings(),
+            stream=False,
+        )
+        print(prompt)
+        full_response = self.parse_gemini_response(response.text)
 
-        <전사원문>
-        {transcription_text}
-        </전사원문>
+        try:
+            # Assuming the response is a properly formatted JSON string
+            return full_response
+        except json.JSONDecodeError:
+            return None
 
-        <output example>
-        [ {{ \"seq_id\" : ...,
-            \"text\" : ...
-        }}, ... ]
-        </output example>"""
+    def split_original_text_to_statements(self, original_text):
+        prompt = f"""현재 Transcribe 작업을 수행 중에 있다. CER, WER, SER 평가를 위해서 원문(original_text)을 문장별로 구분해서 json 형태로 출력해줘. 
+
+<original_text>
+{original_text}
+</original_text>
+
+<output example>
+[ {{ \"seq_id\" : ...,
+    \"original_text\" : ...,
+}}, ... ]
+</output example>"""
         
         model = self.get_model()
         response = model.generate_content(
@@ -97,4 +140,3 @@ class GeminiAPI:
             return full_response
         except json.JSONDecodeError:
             return None
-
