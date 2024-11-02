@@ -68,7 +68,7 @@ class TranscriptionConsumer(threading.Thread):
                     # )
             print('existed loop for process_audio_stream')
         except Exception as e:
-            print(e)
+            e.with_traceback()
             if self.on_error:
                 await self.loop.run_in_executor(None, self.on_error, e)
         finally:

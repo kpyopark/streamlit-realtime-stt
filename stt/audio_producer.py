@@ -83,7 +83,10 @@ class AudioProducer(threading.Thread):
                 try:
                     print("qsize:", self.audio_queue.qsize(), "buffer_size:", len(self.audible_window_chunks))
                     self.audio_queue.put(wav_buffer.getvalue(), block=False)
-                    self.audible_window_chunks = self.audible_window_chunks[-self.overwrap_segment:]
+                    if self.overwrap_segment == 0 :
+                        self.audible_window_chunks = []
+                    else:
+                        self.audible_window_chunks = self.audible_window_chunks[-self.overwrap_segment:]
                     print("buffer size:", len(self.audible_window_chunks), "overwrap_segment:", self.overwrap_segment)
                 except queue.Full:
                     print("Warning: Audio queue is full, skipping chunk")

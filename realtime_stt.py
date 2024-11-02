@@ -26,8 +26,8 @@ load_dotenv()
 SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
 NCHANNEL = os.getenv("NCHANNEL")
 CHUNK_DURATION_MS = 100
-N_OVERWRAP_SEGMENT = 1
-N_CHUNKS_IN_A_WINDOW = 41   # 4.1초
+N_OVERWRAP_SEGMENT = 0
+N_CHUNKS_IN_A_WINDOW = 3   # 4.1초
 
 
 def main():
@@ -77,7 +77,8 @@ def main():
             except Exception as e:
                 print(f"Error handling error: {e}")
         
-        stt_service = GeminiSTTService()
+        #stt_service = GeminiSTTService()
+        stt_service = GoogleCloudSTTService()
         
         manager = AudioTranscriptionManager(
             wav_data=wav_data,
