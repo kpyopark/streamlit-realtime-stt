@@ -9,16 +9,16 @@ from pydub import AudioSegment
 import io
 import asyncio
 import time
-from queue import Queue
+from queue import Queue, Empty
 import threading
+import traceback
 
 load_dotenv()
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 LOCATION = 'us'
 TEST_FILE_NAME = os.getenv("TEST_FILE_NAME")
-
-SAMPLE_RATE = 16000
+SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
 
 # def transcribe_sync_chirp2_auto_detect_language(
 #     audio_file: str
@@ -66,10 +66,11 @@ SAMPLE_RATE = 16000
 
 #     return response
 
+
 def convert_to_wav(audio_file):
     audio = AudioSegment.from_file(audio_file)
     audio = audio.set_channels(1)  # mono
-    audio = audio.set_frame_rate(SAMPLE_RATE)  # 16kHz
+    audio = audio.set_frame_rate(SAMPLING_RATE)  # 16kHz
     
     # WAV 데이터를 메모리에 저장
     wav_buffer = io.BytesIO()
@@ -136,7 +137,8 @@ async def transcribe_streaming_v2(
                 elapsed_time = time.time() - start_time
                 waiting_time = actual_time - elapsed_time
                 await asyncio.sleep(waiting_time)
-                print('feeding', inx)
+                if inx % 10 == 0:
+                    print(f'feeding chunks to {inx // 10} secs.')
                 yield audio_chunk
             except Exception as e :
                 e.with_traceback()
@@ -167,8 +169,126 @@ def transcribe_streaming_v2_sync(
     model: str,
     language_code: str
 ) -> cloud_speech.StreamingRecognizeResponse:
+
+    content = convert_to_wav(audio_file)
+    # 오디오 피딩 쓰레드 시작
+
+    num_of_chunks_in_a_sec = 10
+    chunk_length = SAMPLING_RATE // num_of_chunks_in_a_sec
+    chunk_duration_ms = 1000 // num_of_chunks_in_a_sec
+
+    # 오디오 청크를 저장할 큐 생성
+    audio_queue = Queue()
+    
+    # 피딩 완료를 나타내는 이벤트
+    feeding_done = threading.Event()
+
+    def audio_feeder():
+        start_time = time.time()
+        cnt = 0        
+        # 오디오 데이터를 청크로 나누어 큐에 넣기
+        for chunk_index in range(0, len(content) // chunk_length):
+            start_position = chunk_index * chunk_length
+            chunk = content[start_position:start_position + chunk_length]
+            
+            # 실제 시간과 경과 시간을 계산하여 적절한 딜레이 추가
+            actual_time = (chunk_index * chunk_duration_ms) / 1000
+            elapsed_time = time.time() - start_time
+            wait_time = max(0, actual_time - elapsed_time)
+            
+            if wait_time > 0:
+                time.sleep(wait_time)
+            
+            audio_queue.put(chunk)
+            cnt = cnt + 1
+            if cnt % num_of_chunks_in_a_sec == 0:
+                print(f'feeding chunk - {cnt // num_of_chunks_in_a_sec} seconds')
+        
+        # 피딩 완료 표시
+        feeding_done.set()
+        print("Audio feeding completed")
+
+    feeder_thread = threading.Thread(target=audio_feeder)
+    feeder_thread.start()
+
     # Instantiates a client
-    client = SpeechClient(
+    if location == 'global':
+        client = SpeechClient()
+    else:
+        client = SpeechClient(
+            client_options=ClientOptions(
+                api_endpoint=f"{location}-speech.googleapis.com",
+            )
+        )
+
+    def request_generator(config: cloud_speech.StreamingRecognizeRequest) -> list:
+        # 설정 요청 먼저 전송
+        yield config
+        cnt = 0
+        # 큐에서 오디오 청크를 가져와서 전송
+        while not (feeding_done.is_set() and audio_queue.empty()):
+            try:
+                audio_chunk = audio_queue.get(timeout=0.01)
+                cnt = cnt + 1
+                if cnt % num_of_chunks_in_a_sec == 0 :
+                    print(f'feeded chunks of {cnt // num_of_chunks_in_a_sec} secs.')
+                audio_request = cloud_speech.StreamingRecognizeRequest(audio=audio_chunk)
+                yield audio_request
+            except Empty:
+                continue
+
+    # Recognition 설정
+    recognition_config = cloud_speech.RecognitionConfig(
+        explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+            sample_rate_hertz=SAMPLING_RATE,
+            encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+            audio_channel_count=1
+        ),
+        language_codes=[language_code],
+        model=model,
+    )
+    
+    streaming_config = cloud_speech.StreamingRecognitionConfig(
+        config=recognition_config,
+        streaming_features=cloud_speech.StreamingRecognitionFeatures(
+            interim_results=True
+        ),
+    )
+    
+    config_request = cloud_speech.StreamingRecognizeRequest(
+        recognizer=f"projects/{PROJECT_ID}/locations/{location}/recognizers/_",
+        streaming_config=streaming_config,
+    )
+
+    # Transcription 실행
+    responses = []
+    print("Starting recognition...")
+    
+    try:
+        responses_iterator = client.streaming_recognize(
+            requests=request_generator(config_request)
+        )
+        
+        for response in responses_iterator:
+            print("Response received.")
+            responses.append(response)
+            for result in response.results:
+                print(f"Result: {result}")
+    
+    finally:
+        # 쓰레드 종료 대기
+        feeder_thread.join()
+
+    return responses
+
+async def transcribe_streaming_v2_async(
+    audio_file: str,
+    location: str,
+    model: str,
+    language_code: str
+) -> cloud_speech.StreamingRecognizeResponse:
+    # Instantiates a client
+    client = SpeechAsyncClient(
         client_options=ClientOptions(
             api_endpoint=f"{location}-speech.googleapis.com",
         )
@@ -203,24 +323,30 @@ def transcribe_streaming_v2_sync(
             audio_request = cloud_speech.StreamingRecognizeRequest(audio=chunk)
             audio_queue.put(audio_request)
             cnt = cnt + 1
-            if cnt % 10 == 0:
-                print(f'feeding chunk {start // chunk_length}')
+            # if cnt % 10 == 0:
+            #     print(f'feeding chunk - {cnt // 10} seconds')
+            if feeding_done.is_set():
+                break
         
         # 피딩 완료 표시
         feeding_done.set()
         print("Audio feeding completed")
 
-    def request_generator(config: cloud_speech.StreamingRecognizeRequest) -> list:
+    async def request_generator(config: cloud_speech.StreamingRecognizeRequest) -> list:
         # 설정 요청 먼저 전송
         yield config
-        
+
+        cnt = 0        
         # 큐에서 오디오 청크를 가져와서 전송
         while not (feeding_done.is_set() and audio_queue.empty()):
             try:
                 audio_chunk = audio_queue.get(timeout=1.0)
+                cnt = cnt + 1
+                if cnt % 10 == 0 :
+                    print(f'feeded chunks of {cnt // 10} secs.')
                 yield audio_chunk
                 #print('chunk sent to recognition')
-            except Queue.Empty:
+            except Empty:
                 continue
 
     # Recognition 설정
@@ -251,18 +377,23 @@ def transcribe_streaming_v2_sync(
     print("Starting recognition...")
     
     try:
-        responses_iterator = client.streaming_recognize(
+        responses_iterator = await client.streaming_recognize(
             requests=request_generator(config_request)
         )
-        
-        for response in responses_iterator:
+        print("Waiting response.")
+        async for response in responses_iterator:
             print("Response received.")
             responses.append(response)
             for result in response.results:
                 print(f"Result: {result}")
-    
+    except Exception as e:
+        print(f"에러 메시지: {str(e)}")
+        print(traceback.format_exc())
+        feeding_done.set()
+        print("Audio feeding would be closed cause of the above exception ")
     finally:
         # 쓰레드 종료 대기
+        print("feeding_done is set?", feeding_done.is_set())
         feeder_thread.join()
 
     return responses
@@ -273,13 +404,14 @@ async def main():
     ## await transcribe_streaming_v2(TEST_FILE_NAME, "us-central1", "chirp_2", "cmn-Hans-CN") ### Time Out 이후, google.api_core.exceptions.ServiceUnavailable: 503 502:Bad Gateway
     ## await transcribe_streaming_v2(TEST_FILE_NAME, "asia-southeast1", "chirp_2", "cmn-Hans-CN") ### X, 400 The model "chirp_2" does not exist in the location named "asia-southeast1". -- 문서상으로는 되는데...
     ## await transcribe_streaming_v2(TEST_FILE_NAME, "us-central1", "chirp_2", "cmn-Hans-CN") ### No error. But No Response ++ Added await asyncio.sleep
-    await transcribe_streaming_v2_sync(TEST_FILE_NAME, "us", "long", "cmn-Hans-CN") ### OK
+    #await transcribe_streaming_v2(TEST_FILE_NAME, "us-central1", "chirp_2", "es-US") ### OK
+    await transcribe_streaming_v2_async(TEST_FILE_NAME, "us-central1", "chirp_2", "en-US") ### OK
 
 def sync_main():
-    _thread = threading.Thread(target=transcribe_streaming_v2_sync, args=[TEST_FILE_NAME, "us", "long", "cmn-Hans-CN"])
-    _thread.start()    
+    # _thread = threading.Thread(target=transcribe_streaming_v2_sync, args=[TEST_FILE_NAME, "us-central1", "chirp_2", "en-US"])
+    # _thread.start()    
 
-    # transcribe_streaming_v2_sync(TEST_FILE_NAME, "us", "long", "cmn-Hans-CN") ### OK
+    transcribe_streaming_v2_sync(TEST_FILE_NAME, "us", "long", "cmn-Hans-CN") ### OK
 
 if __name__ == "__main__":
     #asyncio.run(main())

@@ -6,6 +6,8 @@ import unicodedata
 import os
 from pydub import AudioSegment
 import io
+from pathlib import Path
+
 
 
 def convert_to_wav(audio_file, SAMPLING_RATE):
@@ -13,6 +15,9 @@ def convert_to_wav(audio_file, SAMPLING_RATE):
         original_filename = os.path.basename(audio_file.name)
         filename_without_ext = os.path.splitext(original_filename)[0]
         output_filename = f"{filename_without_ext}_{SAMPLING_RATE}.wav"
+        file_path = Path(output_filename)
+        if file_path.exists():
+            return output_filename
         audio = AudioSegment.from_file(audio_file)
         #audio = audio.set_channels(NCHANNEL)
         audio = audio.set_frame_rate(SAMPLING_RATE)
