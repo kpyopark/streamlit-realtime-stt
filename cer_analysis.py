@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import pandas as pd
 from llm_utility import GeminiAPI
-from stt_utility import compute_cer, extract_transcript_from_googlestt_result, clean_chinese_text
+from stt_utility import compute_cer, extract_transcript_from_googlestt_result, clean_chinese_text, make_one_sentence
 
 import os
 import io
@@ -32,6 +32,9 @@ def parse_input_data(file_type, input_text):
         try:
             # CSV 스트링을 DataFrame으로 변환 시도
             df = pd.read_csv(io.StringIO(input_text))
+            if 'Transcript' in df.columns:
+                # Transcript 컬럼 이름을 transcript로 변경
+                df.rename(columns={'Transcript': 'transcript'}, inplace=True)
             if 'transcript' in df.columns:
                 # transcript 컬럼의 모든 텍스트를 연결
                 return ' '.join(df['transcript'].dropna().astype(str))
@@ -42,7 +45,7 @@ def parse_input_data(file_type, input_text):
             print("CSV 파일 처리중 오류")
             print(csve)
             return None
-    else:
+    elif file_type == 'json':
         # CSV 파싱 실패 시 JSON 파싱 시도
         try:
             if isinstance(input_text, str):
@@ -53,11 +56,22 @@ def parse_input_data(file_type, input_text):
             print(e)
             st.error(f"입력 데이터 파싱 오류: 올바른 CSV 또는 JSON 형식이 아닙니다. {str(e)}")
             return None
+    else : # txt
+        try:
+            # CSV 스트링을 DataFrame으로 변환 시도
+            lines = input_text.strip().split('\n')
+            return ' '.join(lines)
+        except Exception as spe:
+            print("Text 파일 처리중 오류")
+            print(spe)
+            return None
+
 
 def create_analysis_dataframe(transcription_statements):
     # 원문 분석 데이터를 DataFrame으로 변환
+    print(transcription_statements)
     df = pd.DataFrame(transcription_statements)
-    
+    print(df)
     # 클렌징된 텍스트 컬럼 추가
     df['cleaned_original'] = df['original_text'].apply(clean_chinese_text)
     df['cleaned_transcription'] = df['transcription'].apply(lambda x: clean_chinese_text(x) if pd.notna(x) else x)
@@ -109,18 +123,24 @@ def show():
 
         result_type = st.selectbox(
             "전사 결과 File Type",
-            options=["json", "csv"],
+            options=["json", "csv", 'txt'],
             format_func=lambda x: {
                 "json": "json",
-                "csv": "csv (transcript column 사용)"
+                "csv": "csv (transcript column 사용)",
+                "txt": "txt"
             }[x]
         )
         
         # 전사 결과 JSON 입력
         transcription_input = st.text_area(
-            "전사 결과 (JSON 또는 CSV)",
+            "전사 결과 (JSON,CSV,TEXT)",
             height=200,
-            help="Google STT 결과 JSON 또는 CSV 형식의 데이터를 입력하세요."
+            help="Google STT 결과 JSON,CSV 또는 TEXT 형식의 데이터를 입력하세요."
+        )
+
+        analysis_type = st.selectbox(
+            "분석 방식",
+            options=["full_text_analysis", "auto_split_analysis(SER)"]
         )
 
         col1, col2 = st.columns(2)
@@ -144,10 +164,16 @@ def show():
                     with st.spinner("전사 결과를 분석 중입니다..."):
                         transcript_text = parse_input_data(result_type, transcription_input)
                         if transcript_text:
-                            result = gemini_api.transcription_to_testdata(st.session_state.original_statements, transcript_text)
-                            if result and 'final' in result:
-                                st.session_state.transcription_statements = result['final']
-                                st.success("전사 분석이 완료되었습니다.")
+                            if analysis_type == "auto_split_analysis(SER)":
+                                result = gemini_api.transcription_to_testdata(st.session_state.original_statements, transcript_text)
+                                if result and 'final' in result:
+                                    st.session_state.transcription_statements = result['final']
+                                    st.success("전사 분석이 완료되었습니다.")
+                            else:
+                                print("full_text_analysis")
+                                concatenated_original_string = make_one_sentence(original_text)
+                                concatenated_transcription_string = make_one_sentence(transcript_text)
+                                st.session_state.transcription_statements = [{"seq_id": 1, "original_text": concatenated_original_string, "transcription": concatenated_transcription_string}]
                 else:
                     if 'original_statements' not in st.session_state:
                         st.warning("먼저 원문 분석을 수행해주세요.")

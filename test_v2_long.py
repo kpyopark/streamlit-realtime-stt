@@ -15,7 +15,12 @@ import traceback
 import wave
 import stt_utility
 from pathlib import Path
+import csv
 
+
+from audio_processor import AudioProcessor
+from audio_amplifier import AudioAmplifier
+from audio_simple_amplifier import VolumeAmplifier
 
 load_dotenv()
 
@@ -24,26 +29,70 @@ LOCATION = 'us'
 TEST_FILE_NAME = os.getenv("TEST_FILE_NAME")
 SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
 
-def convert_to_wav(audio_file, SAMPLING_RATE):
+def convert_to_wav(audio_file, SAMPLING_RATE, denoised_types=[]):
     try:
         original_filename = os.path.basename(audio_file)
         filename_without_ext = os.path.splitext(original_filename)[0]
         output_filename = f"{filename_without_ext}_{SAMPLING_RATE}.wav"
         file_path = Path(output_filename)
-        if file_path.exists():
-            return output_filename
         audio = AudioSegment.from_file(audio_file)
-        #audio = audio.set_channels(NCHANNEL)
         audio = audio.set_frame_rate(SAMPLING_RATE)
+
         wav_buffer = io.BytesIO()
         audio.export(
             wav_buffer,
             format="wav",
-            parameters=["-q:a", "0"]  # 최고 품질 설정
+            parameters=["-q:a", "0", "-ar", str(SAMPLING_RATE)]  # 샘플링 레이트 명시적 지정
         )
         with open(output_filename, 'wb') as f:
             f.write(wav_buffer.getvalue())
-        return output_filename
+
+        last_output_filename = output_filename
+        if len(denoised_types) > 0:
+            processed_filename = f"{filename_without_ext}_{SAMPLING_RATE}_processed.wav"
+            denoised_type = "_".join(denoised_types)
+            denoised_filename = f"{filename_without_ext}_{SAMPLING_RATE}_processed_{denoised_type}.wav"
+            if 'lowpass' in denoised_types:
+                processor = AudioProcessor(last_output_filename)
+                # High Pass Filter 적용
+                processor.remove_noise(cutoff_freq=1700)
+                # 음성 증폭
+                processor.amplify_voice(gain_db=10) 
+                # 다이나믹 레인지 압축 적용
+                processor.save(processed_filename)
+                last_output_filename = processed_filename
+            elif 'equalized' in denoised_types:
+                processor = AudioProcessor(last_output_filename)
+                # 잡음 제거 (저역통과 필터 사용)
+                gains = {
+                    'Sub Bass': 5,    # 20-60Hz
+                    'Bass': 5,         # 60-250Hz
+                    'Low Mids': 5,    # 250-500Hz
+                    'Mids': 3,         # 500-2000Hz
+                    'High Mids': 1,    # 2000-4000Hz
+                    'Presence': -3,     # 4000-6000Hz
+                    'Brilliance': -3   # 6000-20000Hz
+                }
+                processor.apply_equalizer(gains)        # 실패
+                processor.save(processed_filename)
+                last_output_filename = processed_filename
+            elif 'smart' in denoised_types:
+                amplifier = AudioAmplifier(last_output_filename)
+                amplifier.smart_amplify(target_loudness_db=14, clarity_boost=True)
+                amplifier.save(denoised_filename)
+                last_output_filename = denoised_filename
+            elif 'aggressive' in denoised_types:
+                # 음성 증폭
+                amplifier = VolumeAmplifier(last_output_filename)
+                #amplifier.increase_volume_aggressive(target_increase_db=30) # 실패. 단순음량 증가로는 음성 깨짐.
+                amplifier.increase_volume_smart(target_loudness_db=25)
+                amplifier.save(denoised_filename)
+                last_output_filename = denoised_filename
+            else:
+                print('unrecoginized denoised type')
+        else:
+            print('use original file')
+        return denoised_filename
     except Exception as e:
         print(e)
         return None
@@ -224,7 +273,8 @@ def transcribe_streaming_v2_sync(
     language_code: str
 ) -> cloud_speech.StreamingRecognizeResponse:
 
-    output_file_name = convert_to_wav(audio_file, SAMPLING_RATE)
+    #output_file_name = convert_to_wav(audio_file, SAMPLING_RATE)
+    output_file_name = audio_file
     audio = AudioSegment.from_file(output_file_name)
     wav_buffer = io.BytesIO()
     audio.export(wav_buffer, format="wav")
@@ -322,7 +372,12 @@ def transcribe_streaming_v2_sync(
         # 쓰레드 종료 대기
         audio_feeder.stop()
         audio_feeder.join()
-    print('\n'.join(transcripts_full))
+    print("****** Result -- Use below transcript for further analysis ******")
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=['transcript'])
+    for transcript in transcripts_full:
+        writer.writerow({'transcript': transcript})
+    print(output.getvalue())
     return responses
 
 def sync_main():

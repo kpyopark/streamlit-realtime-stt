@@ -4,3 +4,7 @@ google-cloud-speech
 pydub
 python-dotenv
 vertexai
+numpy
+scipy
+librosa
+soundfile

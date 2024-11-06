@@ -7,7 +7,7 @@ import os
 from pydub import AudioSegment
 import io
 from pathlib import Path
-
+import argparse
 
 
 def convert_to_wav(audio_file, SAMPLING_RATE):
@@ -298,6 +298,73 @@ def test_compute_cer():
     for comp in stats['Character Comparison']:
         print(comp)
 
-# 테스트
+def make_one_sentence(texts, needHeader=True):
+    """
+    여러 문장을 하나의 문장으로 결합하는 함수
+    
+    Args:
+        texts (list): 문장 리스트
+    
+    Returns:
+        str: 결합된 문장
+    """
+    # 문장 결합
+    if needHeader:
+        combined_text = ' '.join(texts)
+    else:
+        combined_text = ' '.join(texts[1:]) # remove header
+    
+    # 문장 결합 후 중복 공백 제거
+    combined_text = ' '.join(combined_text.split())
+    
+    return combined_text
+
+def load_text_file(file_path):
+    """
+    텍스트 파일을 읽어들이는 함수
+    
+    Args:
+        file_path (str): 텍스트 파일 경로
+    
+    Returns:
+        str: 텍스트 파일 내용
+    """
+    with open(file_path, 'r', encoding='utf-8') as file:
+        text = file.read()
+    return text
+
+def calculate_cer_from_files():
+    """
+    두 파일에서 텍스트를 읽어 CER을 계산하는 스크립트
+    """
+    parser = argparse.ArgumentParser(description='두 텍스트 파일의 CER을 계산합니다.')
+    parser.add_argument('reference', type=str, help='참조 텍스트 파일 경로')
+    parser.add_argument('hypothesis', type=str, help='비교할 텍스트 파일 경로')
+    args = parser.parse_args()
+
+    # 파일 경로에서 텍스트 불러오기
+    reference_text = load_text_file(args.reference)
+    hypothesis_text = load_text_file(args.hypothesis)
+
+    # 여러 문장을 하나의 문장으로 결합
+    if args.reference.endswith('.json'):
+        reference_text = make_one_sentence(extract_transcript_from_googlestt_result(reference_text))
+    elif args.reference.endswith('.csv'):
+        reference_text = make_one_sentence(reference_text, True)
+    else:
+        reference_text = make_one_sentence(reference_text, False)
+    if args.hypothesis.endswith('.json'):
+        hypothesis_text = make_one_sentence(extract_transcript_from_googlestt_result(hypothesis_text))
+    elif args.hypothesis.endswith('.csv'):
+        hypothesis_text = make_one_sentence(hypothesis_text, True)
+    else:
+        hypothesis_text = make_one_sentence(hypothesis_text, False)
+
+    # CER 계산 및 출력
+    cer, _ = compute_cer(reference_sentence, hypothesis_text)
+    print(f"CER: {cer:.4f}")
+
 if __name__ == "__main__":
-    test_extract_transcript_from_googlestt_result()
+    calculate_cer_from_files()
+
+    

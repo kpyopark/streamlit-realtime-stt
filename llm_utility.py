@@ -60,8 +60,21 @@ class GeminiAPI:
         except:
             return_json = json.loads(fix_json_quotes(cleaned_string))
         return return_json
-        
+
     def transcription_to_testdata(self, original_text_json, transcription_text):
+        outputs = []
+        max_recursion = 10
+        while True:
+            max_recursion = max_recursion - 1
+            if max_recursion < 0:
+                break
+            output = self.transcription_to_testdata_raw(original_text_json, transcription_text, outputs)
+            outputs.extend(output["final"])
+            if output["all_transcription_is_splitted_into_statement"]:
+                break
+        return {'final' : output['final']}
+
+    def transcription_to_testdata_raw(self, original_text_json, transcription_text, previous_output):
         prompt = f"""현재 Transcribe 작업을 수행 중에 있다. CER, WER, SER 평가를 위해서 ground truth가 되는 원문을 문장별로 구분한 자료가 "original_text_json"으로 제공한다.
 
 주어진 <transcription_text> 자료는 Speech to Text실시간 스트리밍 방식으로 전사된 문장들이며, 문장구분이 되어 있지 않다. 
@@ -78,6 +91,12 @@ Draft본에서 seq_id가 없는 경우, 앞 seq_id에 있는 문장에 통합된
 [ {{ "seq_id" : 4, "transcription" : "statement_variation4" , "original_text" : ... }}, {{ "seq_id" : 5, "transcription" : "statement_variation5" , "original_text" : ... }}, ... ]
 형태로 "original_text"에 기반하여 최대한 추가 분리를 수행하여, 원본과 순서 및 텍스트 정합성을 맟추어야 한다.
 
+Output Token이 제한되어 있어서 25문장이 넘어가면, 25문장까지만 답변을 해주면 되.
+만약 <previous_output> 섹션에 값이 있다면 앞에서 구한 output 값이므로, previous_output안의 값에서 제일 마지막 값을 구하고, 현재 output은, 해당 seq_id 이후부터 다시 25문장까지 추가해서 답변을 해줘. 
+예를 들어, <previous_output>에 있는 마지막 seq_id가 25라면, 그 다음문장부터 분리해서 26부터 시작하면 된다.
+모든 문장을 분해하면, all_transcription_is_splitted_into_statement을 true로 설정하면 된다. 
+예를 들어, original_text_json 마지막 seq_id가 23이라면, output의 seq_id도 23이면 마지막 문장이므로, all_transcription_is_splitted_into_statement을 true로 설정하면 된다.
+
 <original_text_json>
 {original_text_json}
 </original_text_json>
@@ -86,15 +105,24 @@ Draft본에서 seq_id가 없는 경우, 앞 seq_id에 있는 문장에 통합된
 {transcription_text}
 </transcription_text>
 
+<previous_output>
+{previous_output}
+</previous_output
+
 <output example>
 {{ 
+"all_transcription_is_splitted_into_statement" : ...,
 "final" : [ {{
 "seq_id" : ...,
 "original_text" : ...,
 "transcription": ...
 }} ... ]
 }}
-</output example>"""
+</output example>
+
+반드시 원문과 전사문장을 비교하면서, 문장을 분리하고, 원문과 비교하여, 문장이 맞는지 확인하고, 문장이 맞지 않는 경우, 다시 분리를 수행하면서, 원문과 비교하면서, 최대한 정확하게 분리를 수행해야 한다.
+
+output json:"""
         
         model = self.get_model()
         response = model.generate_content(
@@ -111,6 +139,7 @@ Draft본에서 seq_id가 없는 경우, 앞 seq_id에 있는 문장에 통합된
             return full_response
         except json.JSONDecodeError:
             return None
+
 
     def split_original_text_to_statements(self, original_text):
         prompt = f"""현재 Transcribe 작업을 수행 중에 있다. CER, WER, SER 평가를 위해서 원문(original_text)을 문장별로 구분해서 json 형태로 출력해줘. 

@@ -57,16 +57,17 @@ def main():
             raise ValueError("오디오 파일이 업로드되지 않았습니다.")
         return utility.convert_to_wav(audio_file=st.session_state.audio_file, SAMPLING_RATE=SAMPLING_RATE)
 
-    def create_streamlit_transcription_manager(audio_file, language_code="ko-KR"):
+    def create_streamlit_transcription_manager(audio_file, language_code="ko-KR", transcript_engine="gemini"):
         """Streamlit 앱용 트랜스크립션 매니저 생성 함수"""
         
         audio = AudioSegment.from_file(audio_file)
-        #audio = audio.set_channels(1)
         audio = audio.set_frame_rate(SAMPLING_RATE)
         
         wav_buffer = io.BytesIO()
         audio.export(wav_buffer, format="wav")
         wav_data = wav_buffer.getvalue()
+
+        print('transcript_engine:', transcript_engine)
         
         if 'full_transcript' not in st.session_state:
             st.session_state.full_transcript = []
@@ -76,18 +77,28 @@ def main():
                 st.error(f"전사 중 오류가 발생했습니다: {str(error)}")
             except Exception as e:
                 print(f"Error handling error: {e}")
-        
-        #stt_service = GeminiSTTService()
-        stt_service = GoogleCloudSTTService()
+
+        if transcript_engine == "gemini":
+            stt_service = GeminiSTTService()
+            chunk_duration_ms = 100
+            overwrap_segment = 1
+            feeding_segment_window = 41
+            need_wave_header = True
+        else:
+            stt_service = GoogleCloudSTTService()
+            chunk_duration_ms = 20
+            overwrap_segment = 0
+            feeding_segment_window = 1
+            need_wave_header = True
         
         manager = AudioTranscriptionManager(
             wav_data=wav_data,
             stt_service=stt_service,
             language_code=language_code,
-            chunk_duration_ms=CHUNK_DURATION_MS,
-            overwrap_segment=N_OVERWRAP_SEGMENT,
-            feeding_segment_window = N_CHUNKS_IN_A_WINDOW,
-            need_wave_header = True,
+            chunk_duration_ms=chunk_duration_ms,
+            overwrap_segment=overwrap_segment,
+            feeding_segment_window = feeding_segment_window,
+            need_wave_header = need_wave_header,
             on_transcription=update_transcription,
             on_error=handle_error,
             message_queue=st.session_state.transcription_items
@@ -133,7 +144,7 @@ def main():
                 st.warning("전사 원문을 입력해주세요.")
 
         # Audio file upload moved to the right column
-        audio_file = st.file_uploader("오디오 파일 선택 (MP3 또는 AAC)", type=['mp3', 'aac'])
+        audio_file = st.file_uploader("오디오 파일 선택 (MP3 또는 AAC)", type=['mp3', 'aac', 'wav'])
 
         if audio_file:
             st.session_state.audio_file = audio_file
@@ -160,25 +171,30 @@ def main():
             "일본어": "ja-JP"
         }
         
+        transcript_engine = st.selectbox(
+            "Transcript Engine",
+            options=["gemini", "stt"],
+        )
+
         # Control buttons
         col1, col2, col3 = st.columns(3)
         with col1:
             start_button = st.button(
-                "변환 시작",
+                "전사 시작",
                 disabled=st.session_state.is_transcribing,
                 on_click=start_transcription,
                 key='start_button'
             )
         with col2:
             stop_button = st.button(
-                "변환 중지",
+                "전사 중지",
                 disabled=not st.session_state.is_transcribing,
                 on_click=stop_transcription,
                 key='stop_button'
             )
         with col3:
             convert_button = st.button(
-                "WAV전환",
+                "Audio파일 WAV전환",
                 disabled=st.session_state.is_transcribing,
                 on_click=convert_to_wav,
                 key='wav_convert'
@@ -267,7 +283,8 @@ def main():
                 try:
                     manager = create_streamlit_transcription_manager(
                         audio_file,
-                        language_code=language_codes[language]
+                        language_code=language_codes[language],
+                        transcript_engine=transcript_engine
                     )
                     st.session_state.transcription_manager = manager
                     manager.start()
