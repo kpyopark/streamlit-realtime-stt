@@ -1,10 +1,11 @@
-pyaudio
 streamlit
-google-cloud-speech
-pydub
 python-dotenv
+pydub
+google-cloud-speech
+pyaudio
 vertexai
 numpy
-scipy
-librosa
-soundfile
+# if you want to use audio denoising, uncomment the following lines
+#scipy 
+#librosa
+#soundfile
