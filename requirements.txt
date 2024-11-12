@@ -5,6 +5,7 @@ google-cloud-speech
 pyaudio
 vertexai
 numpy
+librosa
 # if you want to use audio denoising, uncomment the following lines
 #scipy 
 #librosa

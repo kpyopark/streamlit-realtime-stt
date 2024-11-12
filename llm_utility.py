@@ -72,7 +72,8 @@ class GeminiAPI:
             outputs.extend(output["final"])
             if output["all_transcription_is_splitted_into_statement"]:
                 break
-        return {'final' : output['final']}
+        print(outputs)
+        return {'final' : outputs}
 
     def transcription_to_testdata_raw(self, original_text_json, transcription_text, previous_output):
         prompt = f"""현재 Transcribe 작업을 수행 중에 있다. CER, WER, SER 평가를 위해서 ground truth가 되는 원문을 문장별로 구분한 자료가 "original_text_json"으로 제공한다.
