@@ -36,6 +36,7 @@ class AudioProducer(threading.Thread):
         self._samples_played: int = 0
         self.audible_window_chunks = []         # audible window chunks. It will be used for feeding to STT service. The size of this list is feeding_segment_window.
         self.wf_param = None
+        self.has_audio_device = False
         
     @property
     def audio_config(self) -> Optional[AudioConfig]:
@@ -99,15 +100,15 @@ class AudioProducer(threading.Thread):
         with wave.open(wav_buffer, 'rb') as wf:
             self._init_audio_config(wf)
             chunk_size = self._audio_config.chunk_size
-            
-            p = pyaudio.PyAudio()
-            stream = p.open(
-                format=p.get_format_from_width(self._audio_config.sample_width),
-                channels=self._audio_config.channels,
-                rate=self._audio_config.sample_rate,
-                output=True,
-                frames_per_buffer=chunk_size
-            )
+            if self.has_audio_device:
+                p = pyaudio.PyAudio()
+                stream = p.open(
+                    format=p.get_format_from_width(self._audio_config.sample_width),
+                    channels=self._audio_config.channels,
+                    rate=self._audio_config.sample_rate,
+                    output=True,
+                    frames_per_buffer=chunk_size
+                )
             
             self.is_playing = True
             self._start_time = None
@@ -125,7 +126,8 @@ class AudioProducer(threading.Thread):
                         time.sleep(sleep_time)
                     
                     # Play audio
-                    stream.write(data)
+                    if self.has_audio_device:
+                        stream.write(data)
                     
                     # Update tracking variables
                     self._samples_played += chunk_size
@@ -134,9 +136,12 @@ class AudioProducer(threading.Thread):
                         
             finally:
                 self.flush_audible_chunk()
-                stream.stop_stream()
-                stream.close()
-                p.terminate()
+                if self.has_audio_device:
+                    if stream:
+                        stream.stop_stream()
+                        stream.close()
+                    if p:
+                        p.terminate()
                 self.is_playing = False
                 # Signal end of stream
                 try:
