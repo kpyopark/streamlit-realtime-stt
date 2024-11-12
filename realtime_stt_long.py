@@ -200,7 +200,7 @@ def main():
             update_transcripts(state)
             display_transcripts(state, realtime_container, final_container)
             st.info("전사 처리 중...")
-            time.sleep(0.1)  # UI 업데이트를 위한 짧은 대기
+            time.sleep(0.5)  # UI 업데이트를 위한 짧은 대기
             st.rerun()
         else:
             # 최종 전사 결과 표시
