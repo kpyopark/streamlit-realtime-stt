@@ -96,6 +96,7 @@ Output Token이 제한되어 있어서 25문장이 넘어가면, 25문장까지�
 예를 들어, <previous_output>에 있는 마지막 seq_id가 25라면, 그 다음문장부터 분리해서 26부터 시작하면 된다.
 모든 문장을 분해하면, all_transcription_is_splitted_into_statement을 true로 설정하면 된다. 
 예를 들어, original_text_json 마지막 seq_id가 23이라면, output의 seq_id도 23이면 마지막 문장이므로, all_transcription_is_splitted_into_statement을 true로 설정하면 된다.
+자주, all_transcription_is_splitted_into_statement이 false로 설정되는 경우가 많아서, 원문 seq_id와 결과 출력물이 일치하는지 확인하면서, 최대한 정확하게 문장을 분리하면 된다.
 
 <original_text_json>
 {original_text_json}
@@ -111,12 +112,12 @@ Output Token이 제한되어 있어서 25문장이 넘어가면, 25문장까지�
 
 <output example>
 {{ 
-"all_transcription_is_splitted_into_statement" : ...,
 "final" : [ {{
 "seq_id" : ...,
 "original_text" : ...,
 "transcription": ...
-}} ... ]
+}} ... ],
+"all_transcription_is_splitted_into_statement" : ...
 }}
 </output example>
 

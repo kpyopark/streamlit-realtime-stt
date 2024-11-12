@@ -90,8 +90,6 @@ def convert_to_wav(audio_file, sampling_rate, denoised_types=[]):
                 amplifier.increase_volume_smart(target_loudness_db=25)
                 amplifier.save(denoised_filename)
                 last_output_filename = denoised_filename
-            else:
-                print('unrecoginized denoised type')
         else:
             print('use original file')
         return last_output_filename

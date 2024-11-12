@@ -20,6 +20,7 @@ class TranscriptionState:
     latest_transcript: str
     final_transcripts: List[str]
     is_completed: bool  # 전사 완료 상태를 추적하는 새 필드 추가
+    is_preprocessed: bool = False
 
 def initialize_session_state():
     if 'transcription_state' not in st.session_state:
@@ -33,7 +34,8 @@ def initialize_session_state():
             service=None,
             latest_transcript="",
             final_transcripts=[],
-            is_completed=False  # 초기값 설정
+            is_completed=False,  # 초기값 설정
+            is_preprocessed=False
         )
 
 def update_transcripts(state: TranscriptionState):
@@ -140,49 +142,54 @@ def main():
     
     with col1:
         st.subheader("음성 파일 업로드")
+        denoising_options = ['lowpass', 'equalized', 'smart', 'aggressive']
+        selected_methods = st.multiselect(
+            "디노이징 방법 선택",
+            options=denoising_options,
+            default=[],
+            help="여러 개의 디노이징 방법을 선택할 수 있습니다."
+        )
+        state.denoising_methods = selected_methods
         uploaded_file = st.file_uploader(
             "음성 파일을 선택하세요", 
             type=['wav', 'mp3', 'aac'],
             key="file_uploader"
         )
-        denoising_options = ['lowpass', 'equalized', 'smart', 'aggressive']
-        selected_methods = st.multiselect(
-            "디노이징 방법 선택",
-            options=denoising_options,
-            default=['lowpass'],
-            help="여러 개의 디노이징 방법을 선택할 수 있습니다."
-        )
-        state.denoising_methods = selected_methods
-        
+        # 파일 전처리 버튼
         if uploaded_file and not state.is_processing:
-            # 이전 파일들 정리
-            cleanup_files(state)
-            
-            # 새 임시 파일 생성
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                state.temp_file_path = tmp_file.name
-            
-            try:
-                # 파일 전처리
-                with st.spinner("오디오 파일 전처리 중..."):
-                    state.processed_file_path = process_audio_file(state.temp_file_path, state.denoising_methods)
-                st.success("파일 전처리가 완료되었습니다.")
-                
-                # 전사 시작 버튼
-                if st.button("전사 시작", key="transcribe_button"):
-                    start_transcription(state)
-                    
-            except Exception as e:
-                st.error(f"파일 처리 중 오류가 발생했습니다: {str(e)}")
+            if st.button("파일 전처리 시작"):
                 cleanup_files(state)
-        
-        # 전사 중지 버튼
-        if state.is_processing and not state.is_completed:
-            if st.button("전사 중지", key="realtime_stop_button"):
-                stop_transcription(state)
-                st.warning("전사가 중지되었습니다.")
-    
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    state.temp_file_path = tmp_file.name
+                
+                try:
+                    with st.spinner("오디오 파일 전처리 중..."):
+                        state.processed_file_path = process_audio_file(state.temp_file_path, state.denoising_methods)
+                    state.is_preprocessed = True
+                    st.success("파일 전처리가 완료되었습니다.")
+                except Exception as e:
+                    st.error(f"파일 처리 중 오류가 발생했습니다: {str(e)}")
+                    cleanup_files(state)
+                    state.is_preprocessed = False
+        # 전사 제어 버튼들
+        col3, col4 = st.columns(2)
+        with col3:
+            st.button(
+                "전사 시작",
+                type="primary",
+                disabled=not state.is_preprocessed or state.is_processing,
+                on_click=lambda: start_transcription(state) if state.is_preprocessed and not state.is_processing else None
+            )            
+        with col4:
+            # 전사 중지 버튼 - 전사가 진행중일 때만 활성화
+            st.button(
+                "전사 중지",
+                type="secondary",
+                disabled=not state.is_processing or state.is_completed,
+                on_click=lambda: stop_transcription(state) if state.is_processing and not state.is_completed else None
+            )
     with col2:
         st.subheader("전사 결과")
         realtime_container = st.empty()
