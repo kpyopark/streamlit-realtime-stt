@@ -1,6 +1,6 @@
 import numpy as np
-import librosa
 import soundfile as sf
+import librosa
 from scipy.signal import butter, filtfilt
 
 class AudioAmplifier:
@@ -128,18 +128,23 @@ class AudioAmplifier:
             target_loudness_db (float): 목표 음량 레벨 (dB)
             clarity_boost (bool): 명료도 향상 적용 여부
         """
+        print('n1')
         # 1. 기본 정규화
         self.normalize_audio(target_db=20)
+        print('n2')
         
         # 2. 다이나믹 컴프레션 적용
         self.apply_dynamic_compression(threshold_db=-20, ratio=3)
+        print('n3')
         
         # 3. 명료도 향상 (선택사항)
         if clarity_boost:
             self.enhance_clarity(boost_db=4)
+        print('n4')
         
         # 4. 메이크업 게인으로 최종 음량 조정
         self.apply_makeup_gain(target_lufs=target_loudness_db)
+        print('n5')
         
         # 5. 리미터로 피크 제어
         self.amplify_with_limiter(threshold_db=-1)
@@ -158,3 +163,6 @@ class AudioAmplifier:
         오디오를 원본 상태로 리셋
         """
         self.audio = self.original_audio.copy()
+
+if __name__ == "__main__":
+    pass

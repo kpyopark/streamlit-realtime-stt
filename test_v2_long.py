@@ -16,7 +16,7 @@ import wave
 import stt_utility
 from pathlib import Path
 import csv
-
+import librosa
 
 from audio_processor import AudioProcessor
 from audio_amplifier import AudioAmplifier
@@ -29,29 +29,30 @@ LOCATION = 'us'
 TEST_FILE_NAME = os.getenv("TEST_FILE_NAME")
 SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
 
-def convert_to_wav(audio_file, SAMPLING_RATE, denoised_types=[]):
+def convert_to_wav(audio_file, sampling_rate, denoised_types=[]):
+
     try:
         original_filename = os.path.basename(audio_file)
         filename_without_ext = os.path.splitext(original_filename)[0]
-        output_filename = f"{filename_without_ext}_{SAMPLING_RATE}.wav"
+        output_filename = f"{filename_without_ext}_{sampling_rate}.wav"
         file_path = Path(output_filename)
         audio = AudioSegment.from_file(audio_file)
-        audio = audio.set_frame_rate(SAMPLING_RATE)
+        audio = audio.set_frame_rate(sampling_rate)
 
         wav_buffer = io.BytesIO()
         audio.export(
             wav_buffer,
             format="wav",
-            parameters=["-q:a", "0", "-ar", str(SAMPLING_RATE)]  # 샘플링 레이트 명시적 지정
+            parameters=["-q:a", "0", "-ar", str(sampling_rate)]  # 샘플링 레이트 명시적 지정
         )
         with open(output_filename, 'wb') as f:
             f.write(wav_buffer.getvalue())
 
         last_output_filename = output_filename
         if len(denoised_types) > 0:
-            processed_filename = f"{filename_without_ext}_{SAMPLING_RATE}_processed.wav"
+            processed_filename = f"{filename_without_ext}_{sampling_rate}_processed.wav"
             denoised_type = "_".join(denoised_types)
-            denoised_filename = f"{filename_without_ext}_{SAMPLING_RATE}_processed_{denoised_type}.wav"
+            denoised_filename = f"{filename_without_ext}_{sampling_rate}_processed_{denoised_type}.wav"
             if 'lowpass' in denoised_types:
                 processor = AudioProcessor(last_output_filename)
                 # High Pass Filter 적용
@@ -61,7 +62,8 @@ def convert_to_wav(audio_file, SAMPLING_RATE, denoised_types=[]):
                 # 다이나믹 레인지 압축 적용
                 processor.save(processed_filename)
                 last_output_filename = processed_filename
-            elif 'equalized' in denoised_types:
+            if 'equalized' in denoised_types:
+                print('equalized')
                 processor = AudioProcessor(last_output_filename)
                 # 잡음 제거 (저역통과 필터 사용)
                 gains = {
@@ -76,12 +78,12 @@ def convert_to_wav(audio_file, SAMPLING_RATE, denoised_types=[]):
                 processor.apply_equalizer(gains)        # 실패
                 processor.save(processed_filename)
                 last_output_filename = processed_filename
-            elif 'smart' in denoised_types:
+            if 'smart' in denoised_types:
                 amplifier = AudioAmplifier(last_output_filename)
                 amplifier.smart_amplify(target_loudness_db=14, clarity_boost=True)
                 amplifier.save(denoised_filename)
                 last_output_filename = denoised_filename
-            elif 'aggressive' in denoised_types:
+            if 'aggressive' in denoised_types:
                 # 음성 증폭
                 amplifier = VolumeAmplifier(last_output_filename)
                 #amplifier.increase_volume_aggressive(target_increase_db=30) # 실패. 단순음량 증가로는 음성 깨짐.
@@ -92,8 +94,9 @@ def convert_to_wav(audio_file, SAMPLING_RATE, denoised_types=[]):
                 print('unrecoginized denoised type')
         else:
             print('use original file')
-        return denoised_filename
+        return last_output_filename
     except Exception as e:
+        print('error in convert_to_wav:', e)
         print(e)
         return None
 
@@ -133,7 +136,7 @@ class AudioFeeder(threading.Thread):
                 chunk = self.content[start_position:start_position + self.chunk_length]
                 
                 # 실제 시간과 경과 시간을 계산하여 적절한 딜레이 추가
-                actual_time = (chunk_index * self.chunk_duration_ms) / 1000
+                actual_time = (chunk_index * self.chunk_duration_ms) / 1001   # Thread Delay로 인한 품질 보정.
                 elapsed_time = time.time() - start_time
                 wait_time = max(0, actual_time - elapsed_time)
                 
@@ -270,7 +273,8 @@ def transcribe_streaming_v2_sync(
     audio_file: str,
     location: str,
     model: str,
-    language_code: str
+    language_code: str,
+    messages: list = None
 ) -> cloud_speech.StreamingRecognizeResponse:
 
     #output_file_name = convert_to_wav(audio_file, SAMPLING_RATE)
@@ -363,6 +367,8 @@ def transcribe_streaming_v2_sync(
                         is_final = "T"
                         transcripts_full.append(alternative.transcript)
                     #print(result)
+                if messages is not None:
+                    messages.append({ 'transcript' : transcript , 'is_final' : is_final })
                 print(f'transcript ({is_final}) :', transcript)
         print("response_iterator is finised.")
     except Exception as e:
@@ -380,9 +386,222 @@ def transcribe_streaming_v2_sync(
     print(output.getvalue())
     return responses
 
+class TranscriptionService:
+    def __init__(self, project_id: str, sampling_rate: int = 16000):
+        self.project_id = project_id
+        self.sampling_rate = sampling_rate
+        self.is_running = False
+        self.audio_feeder = None
+        self.transcription_thread = None
+        self.responses = []
+        self.transcripts_full = []
+        self.messages = None
+        self._stop_event = threading.Event()
+
+    def start_transcription(
+        self,
+        audio_file: str,
+        location: str = "us",
+        model: str = "long",
+        language_code: str = "en-US",
+        messages: list = None
+    ):
+        """Start transcription in a separate thread"""
+        if self.is_running:
+            raise RuntimeError("Transcription is already running")
+        
+        self.is_running = True
+        self.messages = messages
+        self._stop_event.clear()
+        
+        self.transcription_thread = threading.Thread(
+            target=self._run_transcription,
+            args=(audio_file, location, model, language_code)
+        )
+        self.transcription_thread.start()
+
+    def stop_transcription(self):
+        """Stop the ongoing transcription"""
+        if not self.is_running:
+            return
+            
+        self._stop_event.set()
+        
+        if self.audio_feeder:
+            self.audio_feeder.stop()
+            
+        if self.transcription_thread:
+            self.transcription_thread.join()
+            
+        self.is_running = False
+        
+    def get_results(self):
+        """Get current transcription results"""
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=['transcript'])
+        for transcript in self.transcripts_full:
+            writer.writerow({'transcript': transcript})
+        return output.getvalue()
+
+    def _run_transcription(
+        self,
+        audio_file: str,
+        location: str,
+        model: str,
+        language_code: str
+    ):
+        try:
+            # Convert audio file to WAV format
+            audio = AudioSegment.from_file(audio_file)
+            wav_buffer = io.BytesIO()
+            audio.export(wav_buffer, format="wav")
+            wav_data = wav_buffer.getvalue()
+
+            # Initialize audio processing parameters
+            num_of_chunks_in_a_sec = 10
+            audio_queue = Queue()
+
+            # Start audio feeder
+            self.audio_feeder = AudioFeeder(
+                wav_data=wav_data,
+                queue=audio_queue,
+                sampling_rate=self.sampling_rate,
+                num_of_chunks_in_a_sec=num_of_chunks_in_a_sec,
+                feeding_segment_window=1
+            )
+            self.audio_feeder.start()
+
+            # Initialize Speech client
+            client = self._create_speech_client(location)
+            
+            # Create recognition config
+            config_request = self._create_recognition_config(
+                location, 
+                model, 
+                language_code
+            )
+
+            # Start transcription
+            stream = ResumableStreamGenerator(
+                config_request,
+                audio_queue,
+                num_of_chunks_in_a_sec
+            )
+
+            while not stream.need_close and not self._stop_event.is_set():
+                print('after stream. start processing.############################################')
+                responses_iterator = client.streaming_recognize(
+                    requests=stream.generator()
+                )
+                print('after responses_iterator. start processing.############################################')
+
+                for response in responses_iterator:
+                    print("Response received.")
+                    if self._stop_event.is_set():
+                        break
+                        
+                    self.responses.append(response)
+                    stream.notify_last_transcription(response)
+                    
+                    self._process_response(response)
+
+                    if stream.need_resume:
+                        break
+
+        except Exception as e:
+            print(f'Error in transcription: {e}')
+            
+        finally:
+            print('finally ended processing.############################################')
+            if self.audio_feeder:
+                self.audio_feeder.stop()
+                self.audio_feeder.join()
+            self.is_running = False
+
+    def _create_speech_client(self, location: str):
+        if location == 'global':
+            return SpeechClient()
+        return SpeechClient(
+            client_options=ClientOptions(
+                api_endpoint=f"{location}-speech.googleapis.com",
+            )
+        )
+
+    def _create_recognition_config(
+        self,
+        location: str,
+        model: str,
+        language_code: str
+    ):
+        recognition_config = cloud_speech.RecognitionConfig(
+            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                sample_rate_hertz=self.sampling_rate,
+                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                audio_channel_count=1
+            ),
+            language_codes=[language_code],
+            model=model,
+        )
+
+        streaming_config = cloud_speech.StreamingRecognitionConfig(
+            config=recognition_config,
+            streaming_features=cloud_speech.StreamingRecognitionFeatures(
+                interim_results=True
+            ),
+        )
+
+        return cloud_speech.StreamingRecognizeRequest(
+            recognizer=f"projects/{self.project_id}/locations/{location}/recognizers/_",
+            streaming_config=streaming_config,
+        )
+
+    def _process_response(self, response):
+        if not response.results:
+            return
+
+        transcript = ""
+        is_final = "F"
+        
+        for result in response.results:
+            if not result.alternatives:
+                continue
+                
+            for alternative in result.alternatives:
+                transcript = transcript + alternative.transcript
+                
+            if result.is_final:
+                is_final = "T"
+                self.transcripts_full.append(alternative.transcript)
+
+        if self.messages is not None:
+            self.messages.append({
+                'transcript': transcript,
+                'is_final': is_final
+            })
+            
+        print(f'transcript ({is_final}): {transcript}')
+
 def sync_main():
-    print(TEST_FILE_NAME)
-    transcribe_streaming_v2_sync(TEST_FILE_NAME, "us", "long", "cmn-Hans-CN") ### OK
+    TEST_FILE_NAME="LNS语音文件_48000.wav"
+    #transcribe_streaming_v2_sync(TEST_FILE_NAME, "us", "long", "cmn-Hans-CN") ### OK
+    # 서비스 초기화
+    output_file_path=convert_to_wav(TEST_FILE_NAME, 16000, ['lowpass'])
+    service = TranscriptionService(project_id=PROJECT_ID)
+
+    # 전사 시작
+    service.start_transcription(
+        audio_file=output_file_path,
+        location="us",
+        model="long",
+        language_code="cmn-Hans-CN"
+    )
+
+    # 필요할 때 중단
+    # service.stop_transcription()
+
+    # 결과 가져오기
+    results = service.get_results()
+    print(results)
 
 if __name__ == "__main__":
     sync_main()

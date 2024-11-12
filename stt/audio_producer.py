@@ -6,6 +6,7 @@ import io
 import time
 from typing import Optional
 from .audio_config import AudioConfig
+import streamlit as st
 
 class AudioProducer(threading.Thread):
     def __init__(self, 
